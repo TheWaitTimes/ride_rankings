@@ -19,7 +19,7 @@ ui <- dashboardPage(
   ),
   dashboardSidebar(
     sidebarMenu(
-      menuItem("Quiz", tabName = "quiz", icon = icon("star")),
+      menuItem("Rankings", tabName = "quiz", icon = icon("star")),
       menuItem("Instructions", tabName = "instructions", icon = icon("info-circle"))
     ),
     br(),
@@ -44,7 +44,7 @@ ui <- dashboardPage(
       tags$style(HTML("
         body, .box, .sidebar, .main-header, .main-sidebar, .main-footer, h1, h2, h3, h4, h5, h6, label, .content-wrapper, .skin-blue .main-sidebar, .skin-blue .main-header .logo, .skin-blue .main-header .navbar, .skin-blue .main-header .navbar .navbar-brand, .skin-blue .main-header .navbar .navbar-title, .skin-blue .main-header .logo {
           font-family: 'Mouse Memoirs', sans-serif !important;
-           font-size: 25px !important;
+           font-size: 23px !important;
         }
         .main-header .logo span, .main-header .logo, .main-header .navbar .navbar-brand, .main-header .navbar .navbar-title, .main-header .navbar .logo {
           font-family: 'Germania One', cursive !important;
@@ -236,6 +236,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
 
 
 
