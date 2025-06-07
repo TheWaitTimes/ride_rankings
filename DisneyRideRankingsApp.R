@@ -29,7 +29,20 @@ ui <- dashboardPage(
       choices = unique(rides$Park_location),
       selected = unique(rides$Park_location)
     ),
-    actionButton("reset", "Reset Quiz")
+    actionButton("reset", "Reset Quiz"),
+    tags$hr(),
+    div(
+      style = "text-align: center;",
+      tags$a(
+        href = "https://buymeacoffee.com/cfbnumbers",
+        target = "_blank",
+        tags$img(
+          src = "https://miro.medium.com/v2/resize:fit:1090/0*lHgOW3tB_MfDAlBf.png",
+          style = "width: 150px; height: auto;",
+          alt = "Buy me a coffee"
+        )
+      )
+    )
   ),
   dashboardBody(
     tags$head(
@@ -103,7 +116,7 @@ server <- function(input, output, session) {
       return()
     }
     # Subsampled pairs
-    num_pairs_to_ask <- min(40, n * (n-1) / 2)
+    num_pairs_to_ask <- min(50, n * (n-1) / 2)
     all_possible_pairs <- t(combn(n, 2))
     if (nrow(all_possible_pairs) > num_pairs_to_ask) {
       sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop=FALSE]
@@ -236,6 +249,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
 
 
 
