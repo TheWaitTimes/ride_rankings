@@ -6,6 +6,12 @@ library(elo)
 # Read rides data
 rides <- read.csv("https://raw.githubusercontent.com/TheWaitTimes/ride_rankings/refs/heads/main/ridenames.csv")
 
+
+norm <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+
 ui <- dashboardPage(
   dashboardHeader(
     title = span(
@@ -201,7 +207,10 @@ server <- function(input, output, session) {
       Ride = df$Ride_name,
       Elo = as.integer(ratings),
       stringsAsFactors = FALSE
-    ) %>% arrange(desc(Elo))
+    ) %>% arrange(desc(Elo)) %>%
+      mutate(Elo = norm(Elo)*100,
+             Elo = round(Elo, 1)) %>%
+      rename(Rating = Elo)
   })
   
   # Only show the ranking table at the end
@@ -219,7 +228,7 @@ server <- function(input, output, session) {
   
   output$ranking_tbl <- renderTable({
     ranking_tbl()
-  }, striped = TRUE, bordered = TRUE)
+  }, striped = TRUE, bordered = TRUE, digits = 1)
 }
 
 shinyApp(ui, server)
