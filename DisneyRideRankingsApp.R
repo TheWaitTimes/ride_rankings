@@ -6,11 +6,9 @@ library(elo)
 # Read rides data
 rides <- read.csv("https://raw.githubusercontent.com/TheWaitTimes/ride_rankings/refs/heads/main/ridenames.csv")
 
-
 norm <- function(x) {
   (x - min(x)) / (max(x) - min(x))
 }
-
 
 ui <- dashboardPage(
   dashboardHeader(
@@ -44,11 +42,16 @@ ui <- dashboardPage(
         rel = "stylesheet"
       ),
       tags$style(HTML("
-        body, .box, .sidebar, .main-header, .main-sidebar, .main-footer, h1, h2, h3, h4, h5, h6, label, .content-wrapper, .skin-blue .main-sidebar, .skin-blue .main-header .logo, .skin-blue .main-header .navbar {
+        body, .box, .sidebar, .main-header, .main-sidebar, .main-footer, h1, h2, h3, h4, h5, h6, label, .content-wrapper, .skin-blue .main-sidebar, .skin-blue .main-header .logo, .skin-blue .main-header .navbar, .skin-blue .main-header .navbar .navbar-brand, .skin-blue .main-header .navbar .navbar-title, .skin-blue .main-header .logo {
           font-family: 'Mouse Memoirs', sans-serif !important;
+           font-size: 25px !important;
         }
         .main-header .logo span, .main-header .logo, .main-header .navbar .navbar-brand, .main-header .navbar .navbar-title, .main-header .navbar .logo {
           font-family: 'Germania One', cursive !important;
+           font-size: 22px !important;
+        }
+        #choose_left, #choose_right {
+          font-size: 1em !important;
         }
       "))
     ),
@@ -71,6 +74,7 @@ ui <- dashboardPage(
     )
   )
 )
+
 server <- function(input, output, session) {
   # Reactive rides data based on park filter
   filtered_rides <- reactive({
@@ -99,7 +103,7 @@ server <- function(input, output, session) {
       return()
     }
     # Subsampled pairs
-    num_pairs_to_ask <- min(40, n * (n-1) / 2) # Change 20 to desired number of comparisons
+    num_pairs_to_ask <- min(40, n * (n-1) / 2)
     all_possible_pairs <- t(combn(n, 2))
     if (nrow(all_possible_pairs) > num_pairs_to_ask) {
       sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop=FALSE]
@@ -129,6 +133,7 @@ server <- function(input, output, session) {
     fluidRow(
       column(5, box(
         width = 12, status = "primary", solidHeader = TRUE,
+        style = "text-align:center;", # center all content
         h4(df$Ride_name[i]),
         p(strong("Park: "), df$Park_location[i]),
         p(strong("Location: "), df$Park_area[i]),
@@ -137,6 +142,7 @@ server <- function(input, output, session) {
       column(2, div(style = "text-align:center;padding-top:60px;", h3("VS"))),
       column(5, box(
         width = 12, status = "warning", solidHeader = TRUE,
+        style = "text-align:center;", # center all content
         h4(df$Ride_name[j]),
         p(strong("Park: "), df$Park_location[j]),
         p(strong("Location: "), df$Park_area[j]),
@@ -159,7 +165,6 @@ server <- function(input, output, session) {
     j <- all_pairs[idx, 2]
     ratings <- as.numeric(elo_ratings())
     n_rides <- nrow(df)
-    # Defensive: Ensure ratings length and i/j validity
     if (length(ratings) != n_rides || is.null(i) || is.null(j) ||
         is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_rides || j > n_rides) {
       showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
@@ -185,7 +190,6 @@ server <- function(input, output, session) {
     j <- all_pairs[idx, 2]
     ratings <- as.numeric(elo_ratings())
     n_rides <- nrow(df)
-    # Defensive: Ensure ratings length and i/j validity
     if (length(ratings) != n_rides || is.null(i) || is.null(j) ||
         is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_rides || j > n_rides) {
       showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
@@ -232,4 +236,6 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
+
 
