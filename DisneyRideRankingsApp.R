@@ -1,28 +1,51 @@
 library(shiny)
 library(shinydashboard)
 library(tidyverse)
+library(elo)
 
+# Read rides data
 rides <- read.csv("https://raw.githubusercontent.com/TheWaitTimes/ride_rankings/refs/heads/main/ridenames.csv")
 
-
-# UI
 ui <- dashboardPage(
-  dashboardHeader(title = "Disney Rides Ranking Quiz"),
+  dashboardHeader(
+    title = span(
+      "Disney Rides Ranking Quiz",
+      style = "font-family: 'Germania One', cursive;"
+    )
+  ),
   dashboardSidebar(
     sidebarMenu(
       menuItem("Quiz", tabName = "quiz", icon = icon("star")),
       menuItem("Instructions", tabName = "instructions", icon = icon("info-circle"))
     ),
     br(),
-    selectInput(
+    checkboxGroupInput(
       "park_filter",
-      "Filter by Park Location:",
-      choices = c("All", unique(rides$Park_location)),
-      selected = "All"
+      "Select Park Locations to Include:",
+      choices = unique(rides$Park_location),
+      selected = unique(rides$Park_location)
     ),
     actionButton("reset", "Reset Quiz")
   ),
   dashboardBody(
+    tags$head(
+      tags$link(
+        href = "https://fonts.googleapis.com/css?family=Germania+One&display=swap",
+        rel = "stylesheet"
+      ),
+      tags$link(
+        href = "https://fonts.googleapis.com/css?family=Mouse+Memoirs&display=swap",
+        rel = "stylesheet"
+      ),
+      tags$style(HTML("
+        body, .box, .sidebar, .main-header, .main-sidebar, .main-footer, h1, h2, h3, h4, h5, h6, label, .content-wrapper, .skin-blue .main-sidebar, .skin-blue .main-header .logo, .skin-blue .main-header .navbar {
+          font-family: 'Mouse Memoirs', sans-serif !important;
+        }
+        .main-header .logo span, .main-header .logo, .main-header .navbar .navbar-brand, .main-header .navbar .navbar-title, .main-header .navbar .logo {
+          font-family: 'Germania One', cursive !important;
+        }
+      "))
+    ),
     tabItems(
       tabItem(
         tabName = "instructions",
@@ -42,22 +65,21 @@ ui <- dashboardPage(
     )
   )
 )
-
-# Server logic
 server <- function(input, output, session) {
   # Reactive rides data based on park filter
   filtered_rides <- reactive({
-    if (is.null(input$park_filter) || input$park_filter == "All") {
-      rides
+    if (is.null(input$park_filter) || length(input$park_filter) == 0) {
+      rides[0, ] # Return empty if nothing selected
     } else {
-      rides %>% filter(Park_location == input$park_filter)
+      rides %>% filter(Park_location %in% input$park_filter)
     }
   })
   
-  # Shuffle pairs at the start and on reset
+  # Subsampled pairwise logic
   pairs <- reactiveVal(NULL)
   choices <- reactiveVal(NULL)
   pair_idx <- reactiveVal(1)
+  elo_ratings <- reactiveVal(NULL)
   
   # Reset logic, also triggers when park_filter changes
   observeEvent(list(input$reset, input$park_filter), {
@@ -67,20 +89,29 @@ server <- function(input, output, session) {
       pairs(NULL)
       choices(NULL)
       pair_idx(1)
+      elo_ratings(rep(1500, n))
       return()
     }
-    all_pairs <- t(combn(n, 2))
-    all_pairs <- all_pairs[sample(nrow(all_pairs)), , drop=FALSE]
-    pairs(all_pairs)
-    choices(rep(NA, nrow(all_pairs)))
+    # Subsampled pairs
+    num_pairs_to_ask <- min(40, n * (n-1) / 2) # Change 20 to desired number of comparisons
+    all_possible_pairs <- t(combn(n, 2))
+    if (nrow(all_possible_pairs) > num_pairs_to_ask) {
+      sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop=FALSE]
+    } else {
+      sampled_pairs <- all_possible_pairs
+    }
+    pairs(sampled_pairs)
+    choices(rep(NA, nrow(sampled_pairs)))
     pair_idx(1)
+    elo_ratings(rep(1500, n))
   }, priority = 100)
   
   # Render UI for the current pair
   output$quiz_ui <- renderUI({
     df <- filtered_rides()
     all_pairs <- pairs()
-    idx <- pair_idx()
+    idx <- as.integer(pair_idx())
+    if (is.null(idx) || is.na(idx) || !is.numeric(idx) || idx < 1) idx <- 1
     if (is.null(all_pairs) || idx > nrow(all_pairs)) {
       if (nrow(df) < 2) {
         return(h4("Not enough rides for a quiz in this park."))
@@ -108,57 +139,77 @@ server <- function(input, output, session) {
     )
   })
   
-  # Handle choices
+  # Handle choices and update Elo
   observeEvent(input$choose_left, {
-    idx <- pair_idx()
+    idx <- as.integer(pair_idx())
+    if (is.null(idx) || is.na(idx) || !is.numeric(idx) || idx < 1) idx <- 1
+    all_pairs <- pairs()
+    if (is.null(all_pairs) || idx > nrow(all_pairs)) return()
     ch <- choices()
     ch[idx] <- "left"
     choices(ch)
+    df <- filtered_rides()
+    i <- all_pairs[idx, 1]
+    j <- all_pairs[idx, 2]
+    ratings <- as.numeric(elo_ratings())
+    n_rides <- nrow(df)
+    # Defensive: Ensure ratings length and i/j validity
+    if (length(ratings) != n_rides || is.null(i) || is.null(j) ||
+        is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_rides || j > n_rides) {
+      showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
+      return()
+    }
+    out <- elo::elo.calc(wins.A = 1, elo.A = ratings[i], elo.B = ratings[j], k = 32)
+    ratings[i] <- out[1]
+    ratings[j] <- out[2]
+    elo_ratings(ratings)
     pair_idx(idx + 1)
   })
   
   observeEvent(input$choose_right, {
-    idx <- pair_idx()
+    idx <- as.integer(pair_idx())
+    if (is.null(idx) || is.na(idx) || !is.numeric(idx) || idx < 1) idx <- 1
+    all_pairs <- pairs()
+    if (is.null(all_pairs) || idx > nrow(all_pairs)) return()
     ch <- choices()
     ch[idx] <- "right"
     choices(ch)
+    df <- filtered_rides()
+    i <- all_pairs[idx, 1]
+    j <- all_pairs[idx, 2]
+    ratings <- as.numeric(elo_ratings())
+    n_rides <- nrow(df)
+    # Defensive: Ensure ratings length and i/j validity
+    if (length(ratings) != n_rides || is.null(i) || is.null(j) ||
+        is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_rides || j > n_rides) {
+      showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
+      return()
+    }
+    out <- elo::elo.calc(wins.A = 0, elo.A = ratings[i], elo.B = ratings[j], k = 32)
+    ratings[i] <- out[1]
+    ratings[j] <- out[2]
+    elo_ratings(ratings)
     pair_idx(idx + 1)
   })
   
-  # Compute ranking based on user choices
+  # Compute ranking based on Elo
   ranking_tbl <- reactive({
     df <- filtered_rides()
-    all_pairs <- pairs()
-    ch <- choices()
-    if (is.null(all_pairs) || nrow(df) < 2) return(NULL)
-    n <- nrow(df)
-    scores <- setNames(rep(0, n), df$Ride_name)
-    for (k in seq_along(ch)) {
-      if (!is.na(ch[k])) {
-        i <- all_pairs[k, 1]
-        j <- all_pairs[k, 2]
-        if (ch[k] == "left") {
-          scores[i] <- scores[i] + 1
-        } else if (ch[k] == "right") {
-          scores[j] <- scores[j] + 1
-        }
-      }
-    }
-    ranking <- data.frame(
-      Ride = names(scores),
-      Score = as.integer(scores),
+    ratings <- as.numeric(elo_ratings())
+    if (is.null(df) || is.null(ratings) || length(ratings) != nrow(df)) return(NULL)
+    data.frame(
+      Ride = df$Ride_name,
+      Elo = as.integer(ratings),
       stringsAsFactors = FALSE
-    )
-    ranking <- ranking[order(-ranking$Score), ]
-    ranking
+    ) %>% arrange(desc(Elo))
   })
   
   # Only show the ranking table at the end
   output$ranking_section <- renderUI({
     df <- filtered_rides()
     all_pairs <- pairs()
-    idx <- pair_idx()
-    if (is.null(all_pairs) || idx <= nrow(all_pairs)) return(NULL)
+    idx <- as.integer(pair_idx())
+    if (is.null(all_pairs) || is.null(idx) || idx <= nrow(all_pairs)) return(NULL)
     box(
       width = 12, status = "success", solidHeader = TRUE,
       h4("Your Ranking:"),
@@ -171,6 +222,5 @@ server <- function(input, output, session) {
   }, striped = TRUE, bordered = TRUE)
 }
 
-# Run the app
 shinyApp(ui, server)
 
