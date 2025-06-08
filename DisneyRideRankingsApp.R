@@ -29,7 +29,7 @@ ui <- dashboardPage(
       choices = unique(rides$Park_location),
       selected = unique(rides$Park_location)
     ),
-    actionButton("reset", "Reset Quiz"),
+    actionButton("reset", "Reset List"),
     tags$hr(),
     div(
       style = "text-align: center;",
@@ -73,7 +73,8 @@ ui <- dashboardPage(
         tabName = "instructions",
         h3("Instructions"),
         p("Choose which Ride you prefer in each pair. The app keeps track of your choices and shows your personalized ranking at the end!"),
-        p("Use the sidebar to filter rides by park and reset the quiz.")
+        p("Use the sidebar to filter rides by park and reset the quiz."),
+        p("If you enjoyed the game, click the button to buy me a coffee! (Or Dole Whip... or those glazed pecans!).")
       ),
       tabItem(
         tabName = "quiz",
@@ -116,7 +117,7 @@ server <- function(input, output, session) {
       return()
     }
     # Subsampled pairs
-    num_pairs_to_ask <- min(50, n * (n-1) / 2)
+    num_pairs_to_ask <- min(60, n * (n-1) / 2)
     all_possible_pairs <- t(combn(n, 2))
     if (nrow(all_possible_pairs) > num_pairs_to_ask) {
       sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop=FALSE]
@@ -139,7 +140,7 @@ server <- function(input, output, session) {
       if (nrow(df) < 2) {
         return(h4("Not enough rides for a quiz in this park."))
       }
-      return(h4("Quiz complete! See your ranking below."))
+      return(h4("Rankings complete! See your list below:"))
     }
     i <- all_pairs[idx, 1]
     j <- all_pairs[idx, 2]
@@ -227,29 +228,63 @@ server <- function(input, output, session) {
     ) %>% arrange(desc(Elo)) %>%
       mutate(Elo = norm(Elo)*100,
              Elo = round(Elo, 1)) %>%
-      rename(Rating = Elo)
+      rename(Rating = Elo) %>%
+      mutate(Rank = rank(-Rating, ties.method = "min")) %>%
+      select(Rank, Ride, Rating)
   })
   
-  # Only show the ranking table at the end
   output$ranking_section <- renderUI({
     df <- filtered_rides()
     all_pairs <- pairs()
     idx <- as.integer(pair_idx())
     if (is.null(all_pairs) || is.null(idx) || idx <= nrow(all_pairs)) return(NULL)
-    box(
-      width = 12, status = "success", solidHeader = TRUE,
-      h4("Your Ranking:"),
-      tableOutput("ranking_tbl")
-    )
+    
+    tbl <- ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      # Split into two roughly equal parts
+      split_point <- ceiling(n / 2)
+      fluidRow(
+        column(6, tableOutput("ranking_tbl_left")),
+        column(6, tableOutput("ranking_tbl_right"))
+      )
+    } else {
+      box(
+        width = 12, status = "success", solidHeader = TRUE,
+        h4("Your Ranking:"),
+        tableOutput("ranking_tbl")
+      )
+    }
   })
   
   output$ranking_tbl <- renderTable({
     ranking_tbl()
   }, striped = TRUE, bordered = TRUE, digits = 1)
+  
+  output$ranking_tbl_left <- renderTable({
+    tbl <- ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      split_point <- ceiling(n / 2)
+      tbl[1:split_point, ]
+    } else {
+      NULL
+    }
+  }, striped = TRUE, bordered = TRUE, digits = 1)
+  
+  output$ranking_tbl_right <- renderTable({
+    tbl <- ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      split_point <- ceiling(n / 2)
+      tbl[(split_point+1):n, ]
+    } else {
+      NULL
+    }
+  }, striped = TRUE, bordered = TRUE, digits = 1)
 }
 
 shinyApp(ui, server)
-
 
 
 
