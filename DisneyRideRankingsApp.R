@@ -10,6 +10,7 @@ norm <- function(x) {
   (x - min(x)) / (max(x) - min(x))
 }
 
+
 ui <- dashboardPage(
   dashboardHeader(
     title = span(
@@ -90,22 +91,34 @@ ui <- dashboardPage(
 )
 
 server <- function(input, output, session) {
-  # Reactive rides data based on park filter
   filtered_rides <- reactive({
     if (is.null(input$park_filter) || length(input$park_filter) == 0) {
-      rides[0, ] # Return empty if nothing selected
+      rides[0, ]
     } else {
       rides %>% filter(Park_location %in% input$park_filter)
     }
   })
+  norm <- function(x) {
+    (x - min(x)) / (max(x) - min(x))
+  }
   
-  # Subsampled pairwise logic
-  pairs <- reactiveVal(NULL)
-  choices <- reactiveVal(NULL)
-  pair_idx <- reactiveVal(1)
-  elo_ratings <- reactiveVal(NULL)
+  # Dynamic K-factor for Elo
+  get_dynamic_k <- function(num) {
+    base_k <- 32
+    if (num < 10) return(base_k)
+    if (num < 30) return(base_k / 2)
+    base_k / 4
+  }
   
-  # Reset logic, also triggers when park_filter changes
+  # --- Reactives and State ---
+  pairs <- reactiveVal(NULL)            # the subsampled pairs for this session
+  choices <- reactiveVal(NULL)          # user choices per pair
+  pair_idx <- reactiveVal(1)            # which pair is currently being shown
+  elo_ratings <- reactiveVal(NULL)      # current Elo for each ride
+  num_comparisons <- reactiveVal(NULL)  # how many times each ride has been compared
+  compared_pairs <- reactiveVal(matrix(ncol=2, nrow=0)) # matrix of pairs already compared
+  
+  # --- Reset logic, also triggers when park_filter changes ---
   observeEvent(list(input$reset, input$park_filter), {
     df <- filtered_rides()
     n <- nrow(df)
@@ -114,23 +127,43 @@ server <- function(input, output, session) {
       choices(NULL)
       pair_idx(1)
       elo_ratings(rep(1500, n))
+      num_comparisons(rep(0, n))
+      compared_pairs(matrix(ncol=2, nrow=0))
       return()
     }
     # Subsampled pairs
-    num_pairs_to_ask <- min(60, n * (n-1) / 2)
     all_possible_pairs <- t(combn(n, 2))
-    if (nrow(all_possible_pairs) > num_pairs_to_ask) {
-      sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop=FALSE]
-    } else {
-      sampled_pairs <- all_possible_pairs
-    }
+    num_pairs_to_ask <- min(80, nrow(all_possible_pairs))  #80 max pairs
+    sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop = FALSE]
     pairs(sampled_pairs)
-    choices(rep(NA, nrow(sampled_pairs)))
+    choices(character(0))
     pair_idx(1)
     elo_ratings(rep(1500, n))
+    num_comparisons(rep(0, n))
+    compared_pairs(matrix(ncol=2, nrow=0))
   }, priority = 100)
   
-  # Render UI for the current pair
+  # --- Helper: Next adaptive pair within sampled pairs ---
+  get_next_pair <- function(rides, elo_scores, compared, sampled_pairs) {
+    n <- nrow(rides)
+    if (n < 2 || is.null(sampled_pairs) || nrow(sampled_pairs) == 0) return(NULL)
+    # Remove already compared pairs
+    remaining_pairs <- sampled_pairs
+    if (nrow(compared) > 0) {
+      already <- apply(remaining_pairs, 1, function(pair) {
+        any(apply(compared, 1, function(cp) all(cp == pair)))
+      })
+      remaining_pairs <- remaining_pairs[!already, , drop = FALSE]
+    }
+    if (nrow(remaining_pairs) == 0) return(NULL)
+    elo_scores <- as.numeric(elo_scores)
+    if (any(is.na(elo_scores))) elo_scores[is.na(elo_scores)] <- 1500
+    elo_diffs <- abs(elo_scores[remaining_pairs[,1]] - elo_scores[remaining_pairs[,2]])
+    min_diff_idx <- which.min(elo_diffs)
+    remaining_pairs[min_diff_idx, ]
+  }
+  
+  # --- UI for the current pair ---
   output$quiz_ui <- renderUI({
     df <- filtered_rides()
     all_pairs <- pairs()
@@ -147,7 +180,7 @@ server <- function(input, output, session) {
     fluidRow(
       column(5, box(
         width = 12, status = "primary", solidHeader = TRUE,
-        style = "text-align:center;", # center all content
+        style = "text-align:center;",
         h4(df$Ride_name[i]),
         p(strong("Park: "), df$Park_location[i]),
         p(strong("Location: "), df$Park_area[i]),
@@ -156,7 +189,7 @@ server <- function(input, output, session) {
       column(2, div(style = "text-align:center;padding-top:60px;", h3("VS"))),
       column(5, box(
         width = 12, status = "warning", solidHeader = TRUE,
-        style = "text-align:center;", # center all content
+        style = "text-align:center;",
         h4(df$Ride_name[j]),
         p(strong("Park: "), df$Park_location[j]),
         p(strong("Location: "), df$Park_area[j]),
@@ -165,65 +198,70 @@ server <- function(input, output, session) {
     )
   })
   
-  # Handle choices and update Elo
+  # --- Choice handling & Elo update ---
+  handle_choice <- function(winner_side) {
+    idx <- as.integer(pair_idx())
+    all_pairs <- pairs()
+    df <- filtered_rides()
+    ratings <- as.numeric(elo_ratings())
+    n_rides <- nrow(df)
+    nc <- num_comparisons()
+    comp <- compared_pairs()
+    if (is.null(all_pairs) || idx > nrow(all_pairs)) return()
+    i <- all_pairs[idx, 1]
+    j <- all_pairs[idx, 2]
+    if (length(ratings) != n_rides || is.null(i) || is.null(j) ||
+        is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_rides || j > n_rides) {
+      showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
+      return()
+    }
+    # Determine winner/loser
+    wins.A <- ifelse(winner_side == "left", 1, 0)
+    # Dynamic K-factor for each ride
+    k_i <- get_dynamic_k(nc[i])
+    k_j <- get_dynamic_k(nc[j])
+    k <- mean(c(k_i, k_j))
+    out <- elo::elo.calc(wins.A = wins.A, elo.A = ratings[i], elo.B = ratings[j], k = k)
+    ratings[i] <- out[1]
+    ratings[j] <- out[2]
+    # Track comparison count
+    nc[i] <- nc[i] + 1
+    nc[j] <- nc[j] + 1
+    # Track compared pairs (so we don't repeat)
+    comp <- rbind(comp, c(i, j))
+    # Find next pair adaptively in the sampled pool
+    next_pair <- get_next_pair(df, ratings, comp, all_pairs)
+    if (is.null(next_pair)) {
+      # No more pairs, finish
+      pairs(all_pairs)
+      pair_idx(nrow(all_pairs) + 1)
+      elo_ratings(ratings)
+      num_comparisons(nc)
+      compared_pairs(comp)
+      return()
+    }
+    pairs(rbind(all_pairs, next_pair))
+    pair_idx(idx + 1)
+    elo_ratings(ratings)
+    num_comparisons(nc)
+    compared_pairs(comp)
+  }
+  
   observeEvent(input$choose_left, {
-    idx <- as.integer(pair_idx())
-    if (is.null(idx) || is.na(idx) || !is.numeric(idx) || idx < 1) idx <- 1
-    all_pairs <- pairs()
-    if (is.null(all_pairs) || idx > nrow(all_pairs)) return()
-    ch <- choices()
-    ch[idx] <- "left"
-    choices(ch)
-    df <- filtered_rides()
-    i <- all_pairs[idx, 1]
-    j <- all_pairs[idx, 2]
-    ratings <- as.numeric(elo_ratings())
-    n_rides <- nrow(df)
-    if (length(ratings) != n_rides || is.null(i) || is.null(j) ||
-        is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_rides || j > n_rides) {
-      showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
-      return()
-    }
-    out <- elo::elo.calc(wins.A = 1, elo.A = ratings[i], elo.B = ratings[j], k = 32)
-    ratings[i] <- out[1]
-    ratings[j] <- out[2]
-    elo_ratings(ratings)
-    pair_idx(idx + 1)
+    handle_choice("left")
   })
-  
   observeEvent(input$choose_right, {
-    idx <- as.integer(pair_idx())
-    if (is.null(idx) || is.na(idx) || !is.numeric(idx) || idx < 1) idx <- 1
-    all_pairs <- pairs()
-    if (is.null(all_pairs) || idx > nrow(all_pairs)) return()
-    ch <- choices()
-    ch[idx] <- "right"
-    choices(ch)
-    df <- filtered_rides()
-    i <- all_pairs[idx, 1]
-    j <- all_pairs[idx, 2]
-    ratings <- as.numeric(elo_ratings())
-    n_rides <- nrow(df)
-    if (length(ratings) != n_rides || is.null(i) || is.null(j) ||
-        is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_rides || j > n_rides) {
-      showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
-      return()
-    }
-    out <- elo::elo.calc(wins.A = 0, elo.A = ratings[i], elo.B = ratings[j], k = 32)
-    ratings[i] <- out[1]
-    ratings[j] <- out[2]
-    elo_ratings(ratings)
-    pair_idx(idx + 1)
+    handle_choice("right")
   })
   
-  # Compute ranking based on Elo
+  # --- Rankings table ---
   ranking_tbl <- reactive({
     df <- filtered_rides()
     ratings <- as.numeric(elo_ratings())
     if (is.null(df) || is.null(ratings) || length(ratings) != nrow(df)) return(NULL)
     data.frame(
       Ride = df$Ride_name,
-      Elo = as.integer(ratings),
+      Elo = as.numeric(ratings), # Force numeric
       stringsAsFactors = FALSE
     ) %>% arrange(desc(Elo)) %>%
       mutate(Elo = norm(Elo)*100,
@@ -238,11 +276,9 @@ server <- function(input, output, session) {
     all_pairs <- pairs()
     idx <- as.integer(pair_idx())
     if (is.null(all_pairs) || is.null(idx) || idx <= nrow(all_pairs)) return(NULL)
-    
     tbl <- ranking_tbl()
     n <- nrow(tbl)
     if (n > 15) {
-      # Split into two roughly equal parts
       split_point <- ceiling(n / 2)
       fluidRow(
         column(6, tableOutput("ranking_tbl_left")),
@@ -260,7 +296,6 @@ server <- function(input, output, session) {
   output$ranking_tbl <- renderTable({
     ranking_tbl()
   }, striped = TRUE, bordered = TRUE, digits = 1)
-  
   output$ranking_tbl_left <- renderTable({
     tbl <- ranking_tbl()
     n <- nrow(tbl)
@@ -271,7 +306,6 @@ server <- function(input, output, session) {
       NULL
     }
   }, striped = TRUE, bordered = TRUE, digits = 1)
-  
   output$ranking_tbl_right <- renderTable({
     tbl <- ranking_tbl()
     n <- nrow(tbl)
@@ -284,8 +318,8 @@ server <- function(input, output, session) {
   }, striped = TRUE, bordered = TRUE, digits = 1)
 }
 
-shinyApp(ui, server)
 
+shinyApp(ui, server)
 
 
 
