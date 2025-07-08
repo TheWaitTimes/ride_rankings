@@ -12,9 +12,10 @@ norm <- function(x) {
 }
 
 ui <- dashboardPage(
+  title = "Disney World Rankings",
   dashboardHeader(
     title = span(
-      "Disney Rides Ranking Quiz",
+      "Disney World Rankings",
       style = "font-family: 'Germania One', cursive;"
     )
   ),
@@ -38,7 +39,7 @@ ui <- dashboardPage(
     ),
     conditionalPanel(
       condition = "input.sidebar == 'quiz' || input.sidebar == 'resorts_quiz'",
-      actionButton("reset", "Reset List")
+      actionButton("reset", "Reset List/Start Rankings", style='font-size: 20px')
     ),
     tags$hr(),
     div(
@@ -65,18 +66,18 @@ ui <- dashboardPage(
         rel = "stylesheet"
       ),
       tags$style(HTML("
-        body, .box, .sidebar, .main-header, .main-sidebar, .main-footer, h1, h2, h3, h4, h5, h6, label, .content-wrapper, .skin-blue .main-sidebar, .skin-blue .main-header .logo, .skin-blue .main-head[...]
-          font-family: 'Mouse Memoirs', sans-serif !important;
-           font-size: 23px !important;
-        }
-        .main-header .logo span, .main-header .logo, .main-header .navbar .navbar-brand, .main-header .navbar .navbar-title, .main-header .navbar .logo {
-          font-family: 'Germania One', cursive !important;
-           font-size: 22px !important;
-        }
-        #choose_left, #choose_right, #choose_resorts_left, #choose_resorts_right {
-          font-size: 1em !important;
-        }
-      "))
+    body, .box, .sidebar, .main-sidebar, .main-footer, h1, h2, h3, h4, h5, h6, label, .content-wrapper, .skin-blue .main-sidebar {
+      font-family: 'Mouse Memoirs', sans-serif !important;
+      font-size: 23px !important;
+    }
+    .main-header, .main-header * {
+      font-family: 'Germania One', cursive !important;
+      font-size: 22px !important;
+    }
+    #choose_left, #choose_right, #choose_resorts_left, #choose_resorts_right {
+      font-size: 1em !important;
+    }
+  "))
     ),
     tabItems(
       tabItem(
@@ -500,9 +501,3 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
-
-
-
-
-
-
