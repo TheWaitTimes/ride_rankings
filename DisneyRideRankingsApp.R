@@ -3,13 +3,13 @@ library(shinydashboard)
 library(tidyverse)
 library(elo)
 
-# Read rides data
+# Read both datasets
 rides <- read.csv("https://raw.githubusercontent.com/TheWaitTimes/ride_rankings/refs/heads/main/ridenames.csv")
+resorts <- read.csv("https://raw.githubusercontent.com/TheWaitTimes/ride_rankings/refs/heads/main/resorts_data.csv")
 
 norm <- function(x) {
   (x - min(x)) / (max(x) - min(x))
 }
-
 
 ui <- dashboardPage(
   dashboardHeader(
@@ -20,17 +20,26 @@ ui <- dashboardPage(
   ),
   dashboardSidebar(
     sidebarMenu(
-      menuItem("Rankings", tabName = "quiz", icon = icon("star")),
+      id = "sidebar",  # This enables input$sidebar to track selected tab!
+      menuItem("Ride Rankings", tabName = "quiz", icon = icon("rocket")),
+      menuItem("Resorts Rankings", tabName = "resorts_quiz", icon = icon("hotel")),
       menuItem("Instructions", tabName = "instructions", icon = icon("info-circle"))
     ),
     br(),
-    checkboxGroupInput(
-      "park_filter",
-      "Select Park Locations to Include:",
-      choices = unique(rides$Park_location),
-      selected = unique(rides$Park_location)
+    # Show checkboxes only on Rankings tab, but show Reset on both Rankings and Resorts Rankings
+    conditionalPanel(
+      condition = "input.sidebar == 'quiz'",
+      checkboxGroupInput(
+        "park_filter",
+        "Select Park Locations to Include:",
+        choices = unique(rides$Park_location),
+        selected = unique(rides$Park_location)
+      )
     ),
-    actionButton("reset", "Reset List"),
+    conditionalPanel(
+      condition = "input.sidebar == 'quiz' || input.sidebar == 'resorts_quiz'",
+      actionButton("reset", "Reset List")
+    ),
     tags$hr(),
     div(
       style = "text-align: center;",
@@ -56,7 +65,7 @@ ui <- dashboardPage(
         rel = "stylesheet"
       ),
       tags$style(HTML("
-        body, .box, .sidebar, .main-header, .main-sidebar, .main-footer, h1, h2, h3, h4, h5, h6, label, .content-wrapper, .skin-blue .main-sidebar, .skin-blue .main-header .logo, .skin-blue .main-header .navbar, .skin-blue .main-header .navbar .navbar-brand, .skin-blue .main-header .navbar .navbar-title, .skin-blue .main-header .logo {
+        body, .box, .sidebar, .main-header, .main-sidebar, .main-footer, h1, h2, h3, h4, h5, h6, label, .content-wrapper, .skin-blue .main-sidebar, .skin-blue .main-header .logo, .skin-blue .main-head[...]
           font-family: 'Mouse Memoirs', sans-serif !important;
            font-size: 23px !important;
         }
@@ -64,7 +73,7 @@ ui <- dashboardPage(
           font-family: 'Germania One', cursive !important;
            font-size: 22px !important;
         }
-        #choose_left, #choose_right {
+        #choose_left, #choose_right, #choose_resorts_left, #choose_resorts_right {
           font-size: 1em !important;
         }
       "))
@@ -73,8 +82,8 @@ ui <- dashboardPage(
       tabItem(
         tabName = "instructions",
         h3("Instructions"),
-        p("Choose which Ride you prefer in each pair. The app keeps track of your choices and shows your personalized ranking at the end!"),
-        p("Use the sidebar to filter rides by park and reset the quiz."),
+        p("Choose which Ride or Resort you prefer in each pair. The app keeps track of your choices and shows your personalized ranking at the end!"),
+        p("Use the sidebar to filter by park and reset the quiz."),
         p("If you enjoyed the game, click the button to buy me a coffee! (Or Dole Whip... or those glazed pecans!).")
       ),
       tabItem(
@@ -85,69 +94,73 @@ ui <- dashboardPage(
         fluidRow(
           box(width = 12, uiOutput("ranking_section"))
         )
+      ),
+      tabItem(
+        tabName = "resorts_quiz",
+        fluidRow(
+          box(width = 12, uiOutput("resorts_quiz_ui"))
+        ),
+        fluidRow(
+          box(width = 12, uiOutput("resorts_ranking_section"))
+        )
       )
     )
   )
 )
 
 server <- function(input, output, session) {
+  # --- Rides logic (original) ---
   filtered_rides <- reactive({
-    if (is.null(input$park_filter) || length(input$park_filter) == 0) {
-      rides[0, ]
+    if (input$sidebar == "quiz") {
+      if (is.null(input$park_filter) || length(input$park_filter) == 0) {
+        rides[0, ]
+      } else {
+        rides %>% filter(Park_location %in% input$park_filter)
+      }
     } else {
-      rides %>% filter(Park_location %in% input$park_filter)
+      rides
     }
   })
-  norm <- function(x) {
-    (x - min(x)) / (max(x) - min(x))
-  }
-  
-  # Dynamic K-factor for Elo
+  norm <- function(x) (x - min(x)) / (max(x) - min(x))
   get_dynamic_k <- function(num) {
     base_k <- 32
     if (num < 10) return(base_k)
     if (num < 30) return(base_k / 2)
     base_k / 4
   }
-  
-  # --- Reactives and State ---
-  pairs <- reactiveVal(NULL)            # the subsampled pairs for this session
-  choices <- reactiveVal(NULL)          # user choices per pair
-  pair_idx <- reactiveVal(1)            # which pair is currently being shown
-  elo_ratings <- reactiveVal(NULL)      # current Elo for each ride
-  num_comparisons <- reactiveVal(NULL)  # how many times each ride has been compared
-  compared_pairs <- reactiveVal(matrix(ncol=2, nrow=0)) # matrix of pairs already compared
-  
-  # --- Reset logic, also triggers when park_filter changes ---
+  pairs <- reactiveVal(NULL)
+  choices <- reactiveVal(NULL)
+  pair_idx <- reactiveVal(1)
+  elo_ratings <- reactiveVal(NULL)
+  num_comparisons <- reactiveVal(NULL)
+  compared_pairs <- reactiveVal(matrix(ncol=2, nrow=0))
   observeEvent(list(input$reset, input$park_filter), {
-    df <- filtered_rides()
-    n <- nrow(df)
-    if (n < 2) {
-      pairs(NULL)
-      choices(NULL)
+    if (input$sidebar == "quiz") {
+      df <- filtered_rides()
+      n <- nrow(df)
+      if (n < 2) {
+        pairs(NULL)
+        choices(NULL)
+        pair_idx(1)
+        elo_ratings(rep(1500, n))
+        num_comparisons(rep(0, n))
+        compared_pairs(matrix(ncol=2, nrow=0))
+        return()
+      }
+      all_possible_pairs <- t(combn(n, 2))
+      num_pairs_to_ask <- min(80, nrow(all_possible_pairs))
+      sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop = FALSE]
+      pairs(sampled_pairs)
+      choices(character(0))
       pair_idx(1)
       elo_ratings(rep(1500, n))
       num_comparisons(rep(0, n))
       compared_pairs(matrix(ncol=2, nrow=0))
-      return()
     }
-    # Subsampled pairs
-    all_possible_pairs <- t(combn(n, 2))
-    num_pairs_to_ask <- min(80, nrow(all_possible_pairs))  #80 max pairs
-    sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop = FALSE]
-    pairs(sampled_pairs)
-    choices(character(0))
-    pair_idx(1)
-    elo_ratings(rep(1500, n))
-    num_comparisons(rep(0, n))
-    compared_pairs(matrix(ncol=2, nrow=0))
   }, priority = 100)
-  
-  # --- Helper: Next adaptive pair within sampled pairs ---
-  get_next_pair <- function(rides, elo_scores, compared, sampled_pairs) {
-    n <- nrow(rides)
+  get_next_pair <- function(df, elo_scores, compared, sampled_pairs) {
+    n <- nrow(df)
     if (n < 2 || is.null(sampled_pairs) || nrow(sampled_pairs) == 0) return(NULL)
-    # Remove already compared pairs
     remaining_pairs <- sampled_pairs
     if (nrow(compared) > 0) {
       already <- apply(remaining_pairs, 1, function(pair) {
@@ -162,8 +175,6 @@ server <- function(input, output, session) {
     min_diff_idx <- which.min(elo_diffs)
     remaining_pairs[min_diff_idx, ]
   }
-  
-  # --- UI for the current pair ---
   output$quiz_ui <- renderUI({
     df <- filtered_rides()
     all_pairs <- pairs()
@@ -197,8 +208,6 @@ server <- function(input, output, session) {
       ))
     )
   })
-  
-  # --- Choice handling & Elo update ---
   handle_choice <- function(winner_side) {
     idx <- as.integer(pair_idx())
     all_pairs <- pairs()
@@ -215,24 +224,18 @@ server <- function(input, output, session) {
       showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
       return()
     }
-    # Determine winner/loser
     wins.A <- ifelse(winner_side == "left", 1, 0)
-    # Dynamic K-factor for each ride
     k_i <- get_dynamic_k(nc[i])
     k_j <- get_dynamic_k(nc[j])
     k <- mean(c(k_i, k_j))
     out <- elo::elo.calc(wins.A = wins.A, elo.A = ratings[i], elo.B = ratings[j], k = k)
     ratings[i] <- out[1]
     ratings[j] <- out[2]
-    # Track comparison count
     nc[i] <- nc[i] + 1
     nc[j] <- nc[j] + 1
-    # Track compared pairs (so we don't repeat)
     comp <- rbind(comp, c(i, j))
-    # Find next pair adaptively in the sampled pool
     next_pair <- get_next_pair(df, ratings, comp, all_pairs)
     if (is.null(next_pair)) {
-      # No more pairs, finish
       pairs(all_pairs)
       pair_idx(nrow(all_pairs) + 1)
       elo_ratings(ratings)
@@ -246,22 +249,15 @@ server <- function(input, output, session) {
     num_comparisons(nc)
     compared_pairs(comp)
   }
-  
-  observeEvent(input$choose_left, {
-    handle_choice("left")
-  })
-  observeEvent(input$choose_right, {
-    handle_choice("right")
-  })
-  
-  # --- Rankings table ---
+  observeEvent(input$choose_left, { handle_choice("left") })
+  observeEvent(input$choose_right, { handle_choice("right") })
   ranking_tbl <- reactive({
     df <- filtered_rides()
     ratings <- as.numeric(elo_ratings())
     if (is.null(df) || is.null(ratings) || length(ratings) != nrow(df)) return(NULL)
     data.frame(
       Ride = df$Ride_name,
-      Elo = as.numeric(ratings), # Force numeric
+      Elo = as.numeric(ratings),
       stringsAsFactors = FALSE
     ) %>% arrange(desc(Elo)) %>%
       mutate(Elo = norm(Elo)*100,
@@ -270,7 +266,6 @@ server <- function(input, output, session) {
       mutate(Rank = rank(-Rating, ties.method = "min")) %>%
       select(Rank, Ride, Rating)
   })
-  
   output$ranking_section <- renderUI({
     df <- filtered_rides()
     all_pairs <- pairs()
@@ -292,7 +287,6 @@ server <- function(input, output, session) {
       )
     }
   })
-  
   output$ranking_tbl <- renderTable({
     ranking_tbl()
   }, striped = TRUE, bordered = TRUE, digits = 1)
@@ -316,10 +310,199 @@ server <- function(input, output, session) {
       NULL
     }
   }, striped = TRUE, bordered = TRUE, digits = 1)
+  
+  # --- Resorts logic (uses all resorts, no filtering) ---
+  filtered_resorts <- reactive({
+    resorts  # Always use the full resorts dataset, no filtering
+  })
+  resorts_pairs <- reactiveVal(NULL)
+  resorts_choices <- reactiveVal(NULL)
+  resorts_pair_idx <- reactiveVal(1)
+  resorts_elo_ratings <- reactiveVal(NULL)
+  resorts_num_comparisons <- reactiveVal(NULL)
+  resorts_compared_pairs <- reactiveVal(matrix(ncol=2, nrow=0))
+  observeEvent(input$reset, {   # Only reset on reset button, not on park_filter
+    if (input$sidebar == "resorts_quiz") {
+      df <- filtered_resorts()
+      n <- nrow(df)
+      if (n < 2) {
+        resorts_pairs(NULL)
+        resorts_choices(NULL)
+        resorts_pair_idx(1)
+        resorts_elo_ratings(rep(1500, n))
+        resorts_num_comparisons(rep(0, n))
+        resorts_compared_pairs(matrix(ncol=2, nrow=0))
+        return()
+      }
+      all_possible_pairs <- t(combn(n, 2))
+      num_pairs_to_ask <- min(80, nrow(all_possible_pairs))
+      sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop = FALSE]
+      resorts_pairs(sampled_pairs)
+      resorts_choices(character(0))
+      resorts_pair_idx(1)
+      resorts_elo_ratings(rep(1500, n))
+      resorts_num_comparisons(rep(0, n))
+      resorts_compared_pairs(matrix(ncol=2, nrow=0))
+    }
+  }, priority = 100)
+  get_resorts_next_pair <- function(df, elo_scores, compared, sampled_pairs) {
+    n <- nrow(df)
+    if (n < 2 || is.null(sampled_pairs) || nrow(sampled_pairs) == 0) return(NULL)
+    remaining_pairs <- sampled_pairs
+    if (nrow(compared) > 0) {
+      already <- apply(remaining_pairs, 1, function(pair) {
+        any(apply(compared, 1, function(cp) all(cp == pair)))
+      })
+      remaining_pairs <- remaining_pairs[!already, , drop = FALSE]
+    }
+    if (nrow(remaining_pairs) == 0) return(NULL)
+    elo_scores <- as.numeric(elo_scores)
+    if (any(is.na(elo_scores))) elo_scores[is.na(elo_scores)] <- 1500
+    elo_diffs <- abs(elo_scores[remaining_pairs[,1]] - elo_scores[remaining_pairs[,2]])
+    min_diff_idx <- which.min(elo_diffs)
+    remaining_pairs[min_diff_idx, ]
+  }
+  output$resorts_quiz_ui <- renderUI({
+    df <- filtered_resorts()
+    all_pairs <- resorts_pairs()
+    idx <- as.integer(resorts_pair_idx())
+    if (is.null(idx) || is.na(idx) || !is.numeric(idx) || idx < 1) idx <- 1
+    if (is.null(all_pairs) || idx > nrow(all_pairs)) {
+      if (nrow(df) < 2) {
+        return(h4("Not enough resorts for a quiz in this park."))
+      }
+      return(h4("Rankings complete! See your list below (Or hit reset list to start a new list)"))
+    }
+    i <- all_pairs[idx, 1]
+    j <- all_pairs[idx, 2]
+    fluidRow(
+      column(5, box(
+        width = 12, status = "primary", solidHeader = TRUE,
+        style = "text-align:center;",
+        h4(df$Resort_name[i]),
+        p(strong("Area: "), df$Park_location[i]),
+        p(strong("Category: "), df$Park_area[i]),
+        actionButton("choose_resorts_left", "Choose", width = "100%")
+      )),
+      column(2, div(style = "text-align:center;padding-top:60px;", h3("VS"))),
+      column(5, box(
+        width = 12, status = "warning", solidHeader = TRUE,
+        style = "text-align:center;",
+        h4(df$Resort_name[j]),
+        p(strong("Area: "), df$Park_location[j]),
+        p(strong("Category: "), df$Park_area[j]),
+        actionButton("choose_resorts_right", "Choose", width = "100%")
+      ))
+    )
+  })
+  handle_resorts_choice <- function(winner_side) {
+    idx <- as.integer(resorts_pair_idx())
+    all_pairs <- resorts_pairs()
+    df <- filtered_resorts()
+    ratings <- as.numeric(resorts_elo_ratings())
+    n_resorts <- nrow(df)
+    nc <- resorts_num_comparisons()
+    comp <- resorts_compared_pairs()
+    if (is.null(all_pairs) || idx > nrow(all_pairs)) return()
+    i <- all_pairs[idx, 1]
+    j <- all_pairs[idx, 2]
+    if (length(ratings) != n_resorts || is.null(i) || is.null(j) ||
+        is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_resorts || j > n_resorts) {
+      showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
+      return()
+    }
+    wins.A <- ifelse(winner_side == "left", 1, 0)
+    k_i <- get_dynamic_k(nc[i])
+    k_j <- get_dynamic_k(nc[j])
+    k <- mean(c(k_i, k_j))
+    out <- elo::elo.calc(wins.A = wins.A, elo.A = ratings[i], elo.B = ratings[j], k = k)
+    ratings[i] <- out[1]
+    ratings[j] <- out[2]
+    nc[i] <- nc[i] + 1
+    nc[j] <- nc[j] + 1
+    comp <- rbind(comp, c(i, j))
+    next_pair <- get_resorts_next_pair(df, ratings, comp, all_pairs)
+    if (is.null(next_pair)) {
+      resorts_pairs(all_pairs)
+      resorts_pair_idx(nrow(all_pairs) + 1)
+      resorts_elo_ratings(ratings)
+      resorts_num_comparisons(nc)
+      resorts_compared_pairs(comp)
+      return()
+    }
+    resorts_pairs(rbind(all_pairs, next_pair))
+    resorts_pair_idx(idx + 1)
+    resorts_elo_ratings(ratings)
+    resorts_num_comparisons(nc)
+    resorts_compared_pairs(comp)
+  }
+  observeEvent(input$choose_resorts_left, { handle_resorts_choice("left") })
+  observeEvent(input$choose_resorts_right, { handle_resorts_choice("right") })
+  resorts_ranking_tbl <- reactive({
+    df <- filtered_resorts()
+    ratings <- as.numeric(resorts_elo_ratings())
+    if (is.null(df) || is.null(ratings) || length(ratings) != nrow(df)) return(NULL)
+    data.frame(
+      Resort = df$Resort_name,
+      Elo = as.numeric(ratings),
+      stringsAsFactors = FALSE
+    ) %>% arrange(desc(Elo)) %>%
+      mutate(Elo = norm(Elo)*100,
+             Elo = round(Elo, 1)) %>%
+      rename(Rating = Elo) %>%
+      mutate(Rank = rank(-Rating, ties.method = "min")) %>%
+      select(Rank, Resort, Rating)
+  })
+  output$resorts_ranking_section <- renderUI({
+    df <- filtered_resorts()
+    all_pairs <- resorts_pairs()
+    idx <- as.integer(resorts_pair_idx())
+    if (is.null(all_pairs) || is.null(idx) || idx <= nrow(all_pairs)) return(NULL)
+    tbl <- resorts_ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      split_point <- ceiling(n / 2)
+      fluidRow(
+        column(6, tableOutput("resorts_ranking_tbl_left")),
+        column(6, tableOutput("resorts_ranking_tbl_right"))
+      )
+    } else {
+      box(
+        width = 12, status = "success", solidHeader = TRUE,
+        h4("Your Ranking:"),
+        tableOutput("resorts_ranking_tbl")
+      )
+    }
+  })
+  output$resorts_ranking_tbl <- renderTable({
+    resorts_ranking_tbl()
+  }, striped = TRUE, bordered = TRUE, digits = 1)
+  output$resorts_ranking_tbl_left <- renderTable({
+    tbl <- resorts_ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      split_point <- ceiling(n / 2)
+      tbl[1:split_point, ]
+    } else {
+      NULL
+    }
+  }, striped = TRUE, bordered = TRUE, digits = 1)
+  output$resorts_ranking_tbl_right <- renderTable({
+    tbl <- resorts_ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      split_point <- ceiling(n / 2)
+      tbl[(split_point+1):n, ]
+    } else {
+      NULL
+    }
+  }, striped = TRUE, bordered = TRUE, digits = 1)
 }
 
-
 shinyApp(ui, server)
+
+
+
 
 
 
