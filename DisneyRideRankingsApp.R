@@ -18,6 +18,15 @@ ui <- dashboardPage(
     title = span(
       "Disney World Rankings",
       style = "font-family: 'Germania One', cursive;"
+    ),
+    tags$li(
+      class = "dropdown",
+      tags$a(
+        href = "#",
+        id = "sidebar-toggle",
+        tags$i(class = "fa fa-bars", style = "color:white;font-size:28px;"),
+        style = "padding: 10px;"
+      )
     )
   ),
   dashboardSidebar(
@@ -78,7 +87,21 @@ ui <- dashboardPage(
     #choose_left, #choose_right, #choose_resorts_left, #choose_resorts_right, #choose_snacks_left, #choose_snacks_right {
       font-size: 1em !important;
     }
-  "))
+  ")),
+      tags$script(HTML("
+  $(document).on('shiny:connected', function() {
+    $('#sidebar-toggle').on('click', function(e) {
+      e.preventDefault();
+      $('body').toggleClass('sidebar-collapse');
+    });
+  });
+")),
+      tags$style(HTML("
+  #sidebar-toggle { display: none; }
+  @media (max-width: 1200px) {
+    #sidebar-toggle { display: inline-block !important; }
+  }
+"))
     ),
     tabItems(
       tabItem(
@@ -698,5 +721,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
+
 
 
