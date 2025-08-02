@@ -3,9 +3,10 @@ library(shinydashboard)
 library(tidyverse)
 library(elo)
 
-# Read both datasets
+# Read all datasets
 rides <- read.csv("https://raw.githubusercontent.com/TheWaitTimes/ride_rankings/refs/heads/main/ridenames.csv")
 resorts <- read.csv("https://raw.githubusercontent.com/TheWaitTimes/ride_rankings/refs/heads/main/resorts_data.csv")
+snacks <- read.csv("https://raw.githubusercontent.com/TheWaitTimes/ride_rankings/refs/heads/main/snacks.csv")
 
 norm <- function(x) {
   (x - min(x)) / (max(x) - min(x))
@@ -21,13 +22,13 @@ ui <- dashboardPage(
   ),
   dashboardSidebar(
     sidebarMenu(
-      id = "sidebar",  # This enables input$sidebar to track selected tab!
+      id = "sidebar",
       menuItem("Ride Rankings", tabName = "quiz", icon = icon("rocket")),
       menuItem("Resorts Rankings", tabName = "resorts_quiz", icon = icon("hotel")),
+      menuItem("Park Snacks Rankings", tabName = "snacks_quiz", icon = icon("ice-cream")),   # NEW MENU ITEM
       menuItem("Instructions", tabName = "instructions", icon = icon("info-circle"))
     ),
     br(),
-    # Show checkboxes only on Rankings tab, but show Reset on both Rankings and Resorts Rankings
     conditionalPanel(
       condition = "input.sidebar == 'quiz'",
       checkboxGroupInput(
@@ -38,7 +39,7 @@ ui <- dashboardPage(
       )
     ),
     conditionalPanel(
-      condition = "input.sidebar == 'quiz' || input.sidebar == 'resorts_quiz'",
+      condition = "input.sidebar == 'quiz' || input.sidebar == 'resorts_quiz' || input.sidebar == 'snacks_quiz'",
       actionButton("reset", "Reset List/Start Rankings", style='font-size: 20px')
     ),
     tags$hr(),
@@ -74,7 +75,7 @@ ui <- dashboardPage(
       font-family: 'Germania One', cursive !important;
       font-size: 22px !important;
     }
-    #choose_left, #choose_right, #choose_resorts_left, #choose_resorts_right {
+    #choose_left, #choose_right, #choose_resorts_left, #choose_resorts_right, #choose_snacks_left, #choose_snacks_right {
       font-size: 1em !important;
     }
   "))
@@ -83,8 +84,8 @@ ui <- dashboardPage(
       tabItem(
         tabName = "instructions",
         h3("Instructions"),
-        p("Choose which Ride or Resort you prefer in each pair. The app keeps track of your choices and shows your personalized ranking at the end!"),
-        p("Use the sidebar to filter by park and reset the quiz."),
+        p("Choose which Ride, Resort, or Snack you prefer in each pair. The app keeps track of your choices and shows your personalized ranking at the end!"),
+        p("Use the sidebar to filter by park (for rides) and reset the quiz."),
         p("If you enjoyed the game, click the button to buy me a coffee! (Or Dole Whip... or those glazed pecans!).")
       ),
       tabItem(
@@ -103,6 +104,15 @@ ui <- dashboardPage(
         ),
         fluidRow(
           box(width = 12, uiOutput("resorts_ranking_section"))
+        )
+      ),
+      tabItem(
+        tabName = "snacks_quiz",
+        fluidRow(
+          box(width = 12, uiOutput("snacks_quiz_ui"))
+        ),
+        fluidRow(
+          box(width = 12, uiOutput("snacks_ranking_section"))
         )
       )
     )
@@ -314,7 +324,7 @@ server <- function(input, output, session) {
   
   # --- Resorts logic (uses all resorts, no filtering) ---
   filtered_resorts <- reactive({
-    resorts  # Always use the full resorts dataset, no filtering
+    resorts
   })
   resorts_pairs <- reactiveVal(NULL)
   resorts_choices <- reactiveVal(NULL)
@@ -322,7 +332,7 @@ server <- function(input, output, session) {
   resorts_elo_ratings <- reactiveVal(NULL)
   resorts_num_comparisons <- reactiveVal(NULL)
   resorts_compared_pairs <- reactiveVal(matrix(ncol=2, nrow=0))
-  observeEvent(input$reset, {   # Only reset on reset button, not on park_filter
+  observeEvent(input$reset, {
     if (input$sidebar == "resorts_quiz") {
       df <- filtered_resorts()
       n <- nrow(df)
@@ -498,6 +508,195 @@ server <- function(input, output, session) {
       NULL
     }
   }, striped = TRUE, bordered = TRUE, digits = 1)
+  
+  # --- Snacks logic (NEW) ---
+  filtered_snacks <- reactive({
+    snacks
+  })
+  snacks_pairs <- reactiveVal(NULL)
+  snacks_choices <- reactiveVal(NULL)
+  snacks_pair_idx <- reactiveVal(1)
+  snacks_elo_ratings <- reactiveVal(NULL)
+  snacks_num_comparisons <- reactiveVal(NULL)
+  snacks_compared_pairs <- reactiveVal(matrix(ncol=2, nrow=0))
+  observeEvent(input$reset, {
+    if (input$sidebar == "snacks_quiz") {
+      df <- filtered_snacks()
+      n <- nrow(df)
+      if (n < 2) {
+        snacks_pairs(NULL)
+        snacks_choices(NULL)
+        snacks_pair_idx(1)
+        snacks_elo_ratings(rep(1500, n))
+        snacks_num_comparisons(rep(0, n))
+        snacks_compared_pairs(matrix(ncol=2, nrow=0))
+        return()
+      }
+      all_possible_pairs <- t(combn(n, 2))
+      num_pairs_to_ask <- min(80, nrow(all_possible_pairs))
+      sampled_pairs <- all_possible_pairs[sample(nrow(all_possible_pairs), num_pairs_to_ask), , drop = FALSE]
+      snacks_pairs(sampled_pairs)
+      snacks_choices(character(0))
+      snacks_pair_idx(1)
+      snacks_elo_ratings(rep(1500, n))
+      snacks_num_comparisons(rep(0, n))
+      snacks_compared_pairs(matrix(ncol=2, nrow=0))
+    }
+  }, priority = 100)
+  get_snacks_next_pair <- function(df, elo_scores, compared, sampled_pairs) {
+    n <- nrow(df)
+    if (n < 2 || is.null(sampled_pairs) || nrow(sampled_pairs) == 0) return(NULL)
+    remaining_pairs <- sampled_pairs
+    if (nrow(compared) > 0) {
+      already <- apply(remaining_pairs, 1, function(pair) {
+        any(apply(compared, 1, function(cp) all(cp == pair)))
+      })
+      remaining_pairs <- remaining_pairs[!already, , drop = FALSE]
+    }
+    if (nrow(remaining_pairs) == 0) return(NULL)
+    elo_scores <- as.numeric(elo_scores)
+    if (any(is.na(elo_scores))) elo_scores[is.na(elo_scores)] <- 1500
+    elo_diffs <- abs(elo_scores[remaining_pairs[,1]] - elo_scores[remaining_pairs[,2]])
+    min_diff_idx <- which.min(elo_diffs)
+    remaining_pairs[min_diff_idx, ]
+  }
+  output$snacks_quiz_ui <- renderUI({
+    df <- filtered_snacks()
+    all_pairs <- snacks_pairs()
+    idx <- as.integer(snacks_pair_idx())
+    if (is.null(idx) || is.na(idx) || !is.numeric(idx) || idx < 1) idx <- 1
+    if (is.null(all_pairs) || idx > nrow(all_pairs)) {
+      if (nrow(df) < 2) {
+        return(h4("Not enough snacks for a quiz."))
+      }
+      return(h4("Rankings complete! See your list below (Or hit reset list to start a new list)"))
+    }
+    i <- all_pairs[idx, 1]
+    j <- all_pairs[idx, 2]
+    fluidRow(
+      column(5, box(
+        width = 12, status = "primary", solidHeader = TRUE,
+        style = "text-align:center;",
+        h4(df$Snack_name[i]),
+        p(strong("Park: "), df$Park_location[i]),
+        p(strong("Location: "), df$Park_area[i]),
+        actionButton("choose_snacks_left", "Choose", width = "100%")
+      )),
+      column(2, div(style = "text-align:center;padding-top:60px;", h3("VS"))),
+      column(5, box(
+        width = 12, status = "warning", solidHeader = TRUE,
+        style = "text-align:center;",
+        h4(df$Snack_name[j]),
+        p(strong("Park: "), df$Park_location[j]),
+        p(strong("Location: "), df$Park_area[j]),
+        actionButton("choose_snacks_right", "Choose", width = "100%")
+      ))
+    )
+  })
+  handle_snacks_choice <- function(winner_side) {
+    idx <- as.integer(snacks_pair_idx())
+    all_pairs <- snacks_pairs()
+    df <- filtered_snacks()
+    ratings <- as.numeric(snacks_elo_ratings())
+    n_snacks <- nrow(df)
+    nc <- snacks_num_comparisons()
+    comp <- snacks_compared_pairs()
+    if (is.null(all_pairs) || idx > nrow(all_pairs)) return()
+    i <- all_pairs[idx, 1]
+    j <- all_pairs[idx, 2]
+    if (length(ratings) != n_snacks || is.null(i) || is.null(j) ||
+        is.na(i) || is.na(j) || i < 1 || j < 1 || i > n_snacks || j > n_snacks) {
+      showNotification("Error: Internal index mismatch. Please reset and try again.", type = "error")
+      return()
+    }
+    wins.A <- ifelse(winner_side == "left", 1, 0)
+    k_i <- get_dynamic_k(nc[i])
+    k_j <- get_dynamic_k(nc[j])
+    k <- mean(c(k_i, k_j))
+    out <- elo::elo.calc(wins.A = wins.A, elo.A = ratings[i], elo.B = ratings[j], k = k)
+    ratings[i] <- out[1]
+    ratings[j] <- out[2]
+    nc[i] <- nc[i] + 1
+    nc[j] <- nc[j] + 1
+    comp <- rbind(comp, c(i, j))
+    next_pair <- get_snacks_next_pair(df, ratings, comp, all_pairs)
+    if (is.null(next_pair)) {
+      snacks_pairs(all_pairs)
+      snacks_pair_idx(nrow(all_pairs) + 1)
+      snacks_elo_ratings(ratings)
+      snacks_num_comparisons(nc)
+      snacks_compared_pairs(comp)
+      return()
+    }
+    snacks_pairs(rbind(all_pairs, next_pair))
+    snacks_pair_idx(idx + 1)
+    snacks_elo_ratings(ratings)
+    snacks_num_comparisons(nc)
+    snacks_compared_pairs(comp)
+  }
+  observeEvent(input$choose_snacks_left, { handle_snacks_choice("left") })
+  observeEvent(input$choose_snacks_right, { handle_snacks_choice("right") })
+  snacks_ranking_tbl <- reactive({
+    df <- filtered_snacks()
+    ratings <- as.numeric(snacks_elo_ratings())
+    if (is.null(df) || is.null(ratings) || length(ratings) != nrow(df)) return(NULL)
+    data.frame(
+      Snack = df$Snack_name,
+      Elo = as.numeric(ratings),
+      stringsAsFactors = FALSE
+    ) %>% arrange(desc(Elo)) %>%
+      mutate(Elo = norm(Elo)*100,
+             Elo = round(Elo, 1)) %>%
+      rename(Rating = Elo) %>%
+      mutate(Rank = rank(-Rating, ties.method = "min")) %>%
+      select(Rank, Snack, Rating)
+  })
+  output$snacks_ranking_section <- renderUI({
+    df <- filtered_snacks()
+    all_pairs <- snacks_pairs()
+    idx <- as.integer(snacks_pair_idx())
+    if (is.null(all_pairs) || is.null(idx) || idx <= nrow(all_pairs)) return(NULL)
+    tbl <- snacks_ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      split_point <- ceiling(n / 2)
+      fluidRow(
+        column(6, tableOutput("snacks_ranking_tbl_left")),
+        column(6, tableOutput("snacks_ranking_tbl_right"))
+      )
+    } else {
+      box(
+        width = 12, status = "success", solidHeader = TRUE,
+        h4("Your Ranking:"),
+        tableOutput("snacks_ranking_tbl")
+      )
+    }
+  })
+  output$snacks_ranking_tbl <- renderTable({
+    snacks_ranking_tbl()
+  }, striped = TRUE, bordered = TRUE, digits = 1)
+  output$snacks_ranking_tbl_left <- renderTable({
+    tbl <- snacks_ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      split_point <- ceiling(n / 2)
+      tbl[1:split_point, ]
+    } else {
+      NULL
+    }
+  }, striped = TRUE, bordered = TRUE, digits = 1)
+  output$snacks_ranking_tbl_right <- renderTable({
+    tbl <- snacks_ranking_tbl()
+    n <- nrow(tbl)
+    if (n > 15) {
+      split_point <- ceiling(n / 2)
+      tbl[(split_point+1):n, ]
+    } else {
+      NULL
+    }
+  }, striped = TRUE, bordered = TRUE, digits = 1)
 }
 
 shinyApp(ui, server)
+
+
